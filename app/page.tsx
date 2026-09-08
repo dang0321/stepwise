@@ -30,14 +30,10 @@ import {
 } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DataView } from '@/components/data-view';
+import { InputSamples } from '@/components/input-samples';
+import { extent, type Role, type ViewKind } from '@/lib/visual-model';
 import { examples } from '@/lib/examples';
-import {
-  changed,
-  container,
-  format,
-  type TraceResult,
-  type Value,
-} from '@/lib/trace';
+import { changed, container, format, type TraceResult } from '@/lib/trace';
 
 type Status = 'idle' | 'loading' | 'running' | 'ready' | 'error';
 function Pick({
@@ -122,6 +118,10 @@ export default function Home() {
   const [variable, setVariable] = useState(''),
     [frameChoice, setFrameChoice] = useState('current'),
     [help, setHelp] = useState(false);
+  const [viewPreference, setViewPreference] = useState<{
+    variable: string;
+    mode: ViewKind;
+  }>({ variable: '', mode: 'auto' });
   const worker = useRef<Worker | null>(null),
     timer = useRef<ReturnType<typeof setTimeout> | null>(null),
     codeViewport = useRef<HTMLDivElement>(null);
@@ -136,17 +136,97 @@ export default function Home() {
         ? step?.stack.at(-1)
         : step?.stack.find((f) => String(f.id) === frameChoice) ||
           step?.stack.at(-1);
-  const vars = actualFrame?.locals || step?.globals || {};
+  const vars = { ...step?.globals, ...actualFrame?.locals };
   const oldVars = actualFrame
-    ? previous?.stack.find((f) => f.id === actualFrame.id)?.locals || {}
+    ? {
+        ...previous?.globals,
+        ...previous?.stack.find((f) => f.id === actualFrame.id)?.locals,
+      }
     : previous?.globals || {};
+  const scopeId = actualFrame?.scope || '<module>';
+  const roles = result?.analysis?.roles || {};
+  function roleFor(name: string): Role | undefined {
+    const local = roles[scopeId]?.[name];
+    if (local) return local;
+    if (
+      scopeId !== '<module>' &&
+      actualFrame &&
+      Object.hasOwn(actualFrame.locals, name)
+    )
+      return undefined;
+    return roles['<module>']?.[name];
+  }
+  const preferred: Record<string, string> = {
+    dijkstra: 'graph',
+    topological: 'graph',
+    bfs: 'graph',
+    dfs: 'graph',
+    union_find: 'forest',
+    binary_search: 'interval',
+    two_pointers: 'interval',
+    sliding_window: 'interval',
+    backtracking: 'stack',
+    dynamic_programming: 'table',
+    prefix_sum: 'prefix',
+    heap: 'heap',
+    frequency: 'frequency',
+    bitmask: 'bits',
+    string_matching: 'table',
+  };
+  preferred.grid_bfs = 'grid';
+  const preferredView = preferred[result?.analysis?.candidates[0]?.id || ''];
   const names = Object.keys(vars),
     structures = names.filter(
       (k) => container(vars[k]) && (vars[k] as { items?: unknown }).items,
     );
-  const selected = names.includes(variable)
-    ? variable
-    : structures[0] || names[0] || '';
+  const ranked = [...names].sort((a, b) => {
+    const score = (name: string) => {
+      const r = roleFor(name);
+      return (
+        (r?.priority || 0) * 10 +
+        (r?.view === preferredView ? 100 : 0) +
+        (step?.focus?.some((f) => f.variable === name) ? 3 : 0) +
+        (structures.includes(name) ? 1 : 0)
+      );
+    };
+    return score(b) - score(a);
+  });
+  const selected = names.includes(variable) ? variable : ranked[0] || '';
+  const viewMode =
+    viewPreference.variable === selected ? viewPreference.mode : 'auto';
+  const selectedRole = roleFor(selected);
+  const selectedBounds =
+    result?.analysis?.bounds[scopeId]?.[selected] ||
+    (scopeId === '<module>' ||
+    !actualFrame ||
+    !Object.hasOwn(actualFrame.locals, selected)
+      ? result?.analysis?.bounds['<module>']?.[selected]
+      : undefined);
+  const topFrame = step?.stack.at(-1);
+  const visibleFocus =
+    actualFrame?.id === topFrame?.id
+      ? step?.focus || []
+      : !actualFrame
+        ? (step?.focus || []).filter(
+            (f) =>
+              topFrame?.name === '<module>' ||
+              !topFrame ||
+              !Object.hasOwn(topFrame.locals, f.variable),
+          )
+        : [];
+  const selectedFrameId =
+    actualFrame?.name !== '<module>' &&
+    actualFrame &&
+    Object.hasOwn(actualFrame.locals, selected)
+      ? actualFrame.id
+      : undefined;
+  const chartScale = extent(
+    (result?.steps || []).map((s) =>
+      selectedFrameId !== undefined
+        ? s.stack.find((f) => f.id === selectedFrameId)?.locals[selected]
+        : s.globals[selected],
+    ),
+  );
   const differences = Array.from(
     new Set([...Object.keys(oldVars), ...names]),
   ).filter((k) => changed(vars[k], oldVars[k]));
@@ -164,6 +244,7 @@ export default function Home() {
       setResult(null);
       setCursor(0);
       setVariable('');
+      setViewPreference({ variable: '', mode: 'auto' });
       setFrameChoice('current');
       setEditing(false);
       setMessage('');
@@ -239,8 +320,14 @@ export default function Home() {
     [clearWorker],
   );
   useEffect(() => {
-    run(examples[0].code, examples[0].stdin);
-    return clearWorker;
+    const startup = setTimeout(
+      () => run(examples[0].code, examples[0].stdin),
+      0,
+    );
+    return () => {
+      clearTimeout(startup);
+      clearWorker();
+    };
   }, [run, clearWorker]);
   useEffect(() => {
     if (!playing) return;
@@ -367,7 +454,9 @@ export default function Home() {
             ? result?.hints[String(line)]
             : '처음 실행할 때는 인터넷에서 파이썬 실행 환경을 내려받습니다.';
   const stateRef = useRef({ result, cursor });
-  stateRef.current = { result, cursor };
+  useEffect(() => {
+    stateRef.current = { result, cursor };
+  }, [result, cursor]);
   useEffect(() => {
     type Context = {
       registerTool: (
@@ -437,6 +526,8 @@ export default function Home() {
   return (
     <main className="app-shell">
       <header className="topbar">
+        {/* A full reload intentionally starts a fresh tracing session. */}
+        {/* oxlint-disable-next-line next/no-html-link-for-pages */}
         <a className="brand" href="./">
           <span className="brand-icon">
             <Workflow size={21} />
@@ -508,7 +599,10 @@ export default function Home() {
             disabled={busy}
             onChange={loadExample}
             items={[
-              ...examples.map((x) => ({ value: x.id, label: x.label })),
+              ...examples.map((x) => ({
+                value: x.id,
+                label: x.category + ' · ' + x.label,
+              })),
               ...(example === 'custom'
                 ? [{ value: 'custom', label: '내 코드' }]
                 : []),
@@ -517,6 +611,53 @@ export default function Home() {
         </div>
         <span className="small-muted">{phase}</span>
       </div>
+      {result?.analysis && (
+        <section className="analysis-panel" aria-label="코드 분석 결과">
+          <div className="analysis-title">
+            <strong>
+              {result.analysis.candidates[0]?.label || '일반 파이썬 실행'}
+            </strong>
+            <span>실제 코드의 연산 패턴 분석</span>
+            <span>{examples.length}개 예제</span>
+          </div>
+          <p>
+            {result.analysis.candidates[0]?.evidence ||
+              '특정 알고리즘 패턴을 확정하지 못했습니다. 실행 값의 형태에 맞춰 표시합니다.'}
+          </p>
+          <details>
+            <summary>
+              추정 근거와 함께 발견한 패턴 {result.analysis.candidates.length}개
+            </summary>
+            <p>{result.analysis.note}</p>
+            <div className="coverage-list">
+              {result.analysis.candidates.map((c) => (
+                <div key={c.id}>
+                  <strong>{c.label}</strong>
+                  <span>{c.evidence}</span>
+                  <span>
+                    {c.lines.map((n) => (
+                      <button
+                        key={n}
+                        onClick={() => {
+                          const index = steps.findIndex(
+                            (s) => s.event === 'line' && s.line === n,
+                          );
+                          if (index >= 0) {
+                            setPlaying(false);
+                            setCursor(index);
+                          }
+                        }}
+                      >
+                        L{n}
+                      </button>
+                    ))}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </details>
+        </section>
+      )}
       <section className="workspace" id="workspace">
         <article className="code-panel">
           <div className="panel-heading">
@@ -574,6 +715,8 @@ export default function Home() {
             <div
               className="code-read"
               ref={codeViewport}
+              // Keyboard users need to focus and scroll the code viewport.
+              // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex
               tabIndex={0}
               aria-label="실행 코드와 다음 실행 위치"
             >
@@ -612,6 +755,15 @@ export default function Home() {
               }}
               placeholder="필요한 입력을 줄마다 적어주세요"
               spellCheck={false}
+            />
+            <InputSamples
+              key={code}
+              code={code}
+              disabled={busy}
+              onApply={(text) => {
+                setStdin(text);
+                invalidate();
+              }}
             />
           </div>
           <div className="editor-footer">
@@ -683,6 +835,46 @@ export default function Home() {
                 <i /> 변경된 값
               </span>
             </div>
+            {selected && (
+              <div className="view-settings">
+                <div>
+                  <Pick
+                    label="표시 방식"
+                    value={viewMode}
+                    onChange={(v) =>
+                      setViewPreference({
+                        variable: selected,
+                        mode: v as ViewKind,
+                      })
+                    }
+                    items={[
+                      { value: 'auto', label: '자동 추천' },
+                      { value: 'cards', label: '값 카드' },
+                      { value: 'array', label: '배열 막대' },
+                      { value: 'table', label: '상태 테이블' },
+                      { value: 'graph', label: '방향 그래프' },
+                      { value: 'heap', label: '이진 힙' },
+                      { value: 'forest', label: '부모 트리' },
+                      { value: 'bits', label: '비트' },
+                    ]}
+                  />
+                  <button
+                    className="text-button"
+                    onClick={() => {
+                      setVariable('');
+                      setViewPreference({ variable: '', mode: 'auto' });
+                    }}
+                  >
+                    자동 추적으로
+                  </button>
+                </div>
+                <p>
+                  {selectedRole
+                    ? '추천 근거: ' + selectedRole.reason
+                    : '값의 자료형에 맞춰 표시합니다. 표시 방식을 직접 바꿀 수 있어요.'}
+                </p>
+              </div>
+            )}
             {selected ? (
               <Tabs defaultValue="visual" className="data-tabs">
                 <TabsList variant="line">
@@ -694,6 +886,12 @@ export default function Home() {
                     value={vars[selected]}
                     previous={oldVars[selected]}
                     variables={vars}
+                    name={selected}
+                    role={selectedRole}
+                    mode={viewMode}
+                    focus={visibleFocus}
+                    scale={chartScale}
+                    bounds={selectedBounds}
                   />
                 </TabsContent>
                 <TabsContent value="raw">
@@ -719,6 +917,25 @@ export default function Home() {
                 </p>
               </div>
             )}
+            {selected &&
+              structures.filter((n) => n !== selected).length > 0 && (
+                <div className="related-values" aria-label="함께 볼 자료구조">
+                  {structures
+                    .filter((n) => n !== selected)
+                    .sort(
+                      (a, b) =>
+                        (roleFor(b)?.priority || 0) -
+                        (roleFor(a)?.priority || 0),
+                    )
+                    .slice(0, 3)
+                    .map((n) => (
+                      <button key={n} onClick={() => setVariable(n)}>
+                        <code>{n}</code>
+                        <span>{format(vars[n])}</span>
+                      </button>
+                    ))}
+                </div>
+              )}
             <div
               className={
                 'step-insight ' +
@@ -737,6 +954,25 @@ export default function Home() {
               <div>
                 <strong>{insightTitle}</strong>
                 <p>{insightBody}</p>
+                {step?.condition && (
+                  <p className="condition-result">
+                    현재 값으로 조건 검사 →{' '}
+                    <strong>
+                      {step.condition.value ? 'True · 참' : 'False · 거짓'}
+                    </strong>
+                  </p>
+                )}
+                {(step?.focus?.length || 0) > 0 && (
+                  <div className="access-tags">
+                    {step?.focus?.map((f, i) => (
+                      <span className={'access-' + f.kind} key={i}>
+                        {f.kind === 'write' ? '다음 쓰기' : '다음 읽기'} ·{' '}
+                        {f.expression} → {f.variable}
+                        {f.indices.map((n) => '[' + n + ']').join('')}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {comment && <p className="source-comment"># {comment}</p>}
               </div>
             </div>
@@ -769,7 +1005,7 @@ export default function Home() {
                     value={frameChoice}
                     onChange={setFrameChoice}
                     items={[
-                      { value: 'current', label: '현재 함수' },
+                      { value: 'current', label: '현재 함수 + 전역' },
                       { value: 'global', label: '전역' },
                       ...step.stack
                         .filter((f) => f.name !== '<module>')

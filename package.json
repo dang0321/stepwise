@@ -11,7 +11,7 @@
     "start": "node scripts/serve.mjs",
     "lint": "oxlint",
     "format": "oxfmt",
-    "test": "node tests/value-format.mjs && node tests/runtime.mjs",
+    "test": "node tests/value-format.mjs && node tests/visual-model.mjs && node tests/runtime.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

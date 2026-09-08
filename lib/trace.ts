@@ -1,3 +1,4 @@
+import type { Analysis, Focus } from './visual-model.ts';
 export type Value =
   | null
   | boolean
@@ -12,6 +13,7 @@ export type Value =
 export type Frame = {
   id: number;
   name: string;
+  scope?: string;
   line: number;
   locals: Record<string, Value>;
 };
@@ -23,6 +25,8 @@ export type Step = {
   output: string;
   returnValue?: Value;
   error?: TraceError;
+  focus?: Focus[];
+  condition?: { expression: string; value: boolean };
 };
 export type TraceError = { type: string; message: string; line: number | null };
 export type TraceResult = {
@@ -33,6 +37,7 @@ export type TraceResult = {
   comments: Record<string, string>;
   elapsedMs: number;
   pythonVersion: string;
+  analysis?: Analysis | null;
 };
 export function container(
   v: Value | undefined,

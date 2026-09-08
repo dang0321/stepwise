@@ -28,6 +28,8 @@
     "out/**",
     "build/**",
     "dist/**",
+    "docs/**",
+    "work/**",
     "coverage/**",
     "next-env.d.ts"
   ],

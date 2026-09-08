@@ -1,0 +1,338 @@
+export const extraExamples = [
+  {
+    id: 'insertion',
+    label: '삽입 정렬',
+    category: '정렬',
+    stdin: '6\n5 2 4 6 1 3',
+    expected: '[1, 2, 3, 4, 5, 6]\n',
+    patterns: ['sorting'],
+    code: 'n = int(input())\nvalues = list(map(int, input().split()))\nfor i in range(1, n):\n    j = i\n    # 현재 값을 왼쪽의 올바른 위치로 이동합니다\n    while j > 0 and values[j - 1] > values[j]:\n        values[j - 1], values[j] = values[j], values[j - 1]\n        j -= 1\nprint(values)',
+    samples: [
+      {
+        label: '이미 정렬됨',
+        stdin: '4\n1 2 3 4',
+        expected: '[1, 2, 3, 4]\n',
+      },
+      {
+        label: '중복·음수',
+        stdin: '5\n2 -1 2 0 -1',
+        expected: '[-1, -1, 0, 2, 2]\n',
+      },
+    ],
+  },
+  {
+    id: 'dfs',
+    label: 'DFS · 연결 그래프',
+    category: '그래프',
+    stdin: '5 5\n0 1\n0 2\n1 3\n2 3\n3 4',
+    expected: '[0, 1, 3, 2, 4]\n',
+    patterns: ['dfs'],
+    code: 'n, m = map(int, input().split())\ngraph = [[] for _ in range(n)]\nfor _ in range(m):\n    a, b = map(int, input().split())\n    graph[a].append(b)\n    graph[b].append(a)\nvisited = [False] * n\norder = []\n\ndef explore(vertex):\n    visited[vertex] = True\n    order.append(vertex)\n    # 아직 방문하지 않은 이웃으로 깊이 들어갑니다\n    for neighbor in graph[vertex]:\n        if not visited[neighbor]:\n            explore(neighbor)\n\nexplore(0)\nprint(order)',
+    samples: [
+      {
+        label: '정점 하나',
+        stdin: '1 0',
+        expected: '[0]\n',
+      },
+      {
+        label: '연결되지 않은 정점',
+        stdin: '4 1\n0 1',
+        expected: '[0, 1]\n',
+      },
+    ],
+  },
+  {
+    id: 'dijkstra',
+    label: '다익스트라 · 가중 그래프',
+    category: '그래프',
+    stdin: '5 6\n0 1 2\n0 2 7\n1 2 1\n1 3 5\n2 3 2\n3 4 1',
+    expected: '[0, 2, 3, 5, 6]\n',
+    patterns: ['dijkstra'],
+    code: 'import heapq\nn, m = map(int, input().split())\ngraph = [[] for _ in range(n)]\nfor _ in range(m):\n    a, b, weight = map(int, input().split())\n    graph[a].append((b, weight))\ndistance = [float("inf")] * n\ndistance[0] = 0\nheap = [(0, 0)]\n\nwhile heap:\n    cost, vertex = heapq.heappop(heap)\n    if cost > distance[vertex]:\n        continue\n    for neighbor, weight in graph[vertex]:\n        candidate = cost + weight\n        # 더 짧은 경로를 찾으면 비용과 우선순위 큐를 갱신합니다\n        if candidate < distance[neighbor]:\n            distance[neighbor] = candidate\n            heapq.heappush(heap, (candidate, neighbor))\nprint(distance)',
+    samples: [
+      {
+        label: '시작 정점만',
+        stdin: '1 0',
+        expected: '[0]\n',
+      },
+      {
+        label: '도달 불가',
+        stdin: '3 1\n0 1 4',
+        expected: '[0, 4, inf]\n',
+      },
+    ],
+  },
+  {
+    id: 'topological',
+    label: '위상 정렬',
+    category: '그래프',
+    stdin: '5 5\n0 2\n1 2\n1 3\n2 4\n3 4',
+    expected: '[0, 1, 2, 3, 4]\n',
+    patterns: ['topological'],
+    code: 'from collections import deque\nn, m = map(int, input().split())\ngraph = [[] for _ in range(n)]\nindegree = [0] * n\nfor _ in range(m):\n    a, b = map(int, input().split())\n    graph[a].append(b)\n    indegree[b] += 1\nqueue = deque(i for i in range(n) if indegree[i] == 0)\norder = []\nwhile queue:\n    vertex = queue.popleft()\n    order.append(vertex)\n    for neighbor in graph[vertex]:\n        # 선행 작업이 모두 끝난 정점을 큐에 넣습니다\n        indegree[neighbor] -= 1\n        if indegree[neighbor] == 0:\n            queue.append(neighbor)\nprint(order if len(order) == n else "cycle")',
+    samples: [
+      {
+        label: '선행 조건 없음',
+        stdin: '3 0',
+        expected: '[0, 1, 2]\n',
+      },
+      {
+        label: '사이클 검출',
+        stdin: '3 3\n0 1\n1 2\n2 0',
+        expected: 'cycle\n',
+      },
+    ],
+  },
+  {
+    id: 'union_find',
+    label: '유니온 파인드',
+    category: '그래프',
+    stdin: '5 3\n0 1\n2 3\n1 2',
+    expected: '[3, 3, 3, 3, 4]\n',
+    patterns: ['union_find'],
+    code: 'n, m = map(int, input().split())\nparent = list(range(n))\n\ndef find(x):\n    if parent[x] != x:\n        # 대표 정점으로 바로 연결해 다음 탐색을 줄입니다\n        parent[x] = find(parent[x])\n    return parent[x]\n\nfor _ in range(m):\n    a, b = map(int, input().split())\n    root_a, root_b = find(a), find(b)\n    parent[root_a] = root_b\nroots = [find(i) for i in range(n)]\nprint(roots)',
+    samples: [
+      {
+        label: '서로 다른 집합',
+        stdin: '3 0',
+        expected: '[0, 1, 2]\n',
+      },
+      {
+        label: '중복 합치기',
+        stdin: '3 3\n0 1\n1 0\n1 2',
+        expected: '[2, 2, 2]\n',
+      },
+    ],
+  },
+  {
+    id: 'fibonacci',
+    label: 'DP · 피보나치',
+    category: '동적 계획법',
+    stdin: '7',
+    expected: '13\n',
+    patterns: ['dynamic_programming'],
+    code: 'n = int(input())\ndp = [0] * (n + 2)\ndp[1] = 1\nfor i in range(2, n + 1):\n    # 이전 두 상태를 합쳐 현재 상태를 구합니다\n    dp[i] = dp[i - 1] + dp[i - 2]\nprint(dp[n])',
+    samples: [
+      {
+        label: '첫 상태',
+        stdin: '0',
+        expected: '0\n',
+      },
+      {
+        label: '두 번째 상태',
+        stdin: '1',
+        expected: '1\n',
+      },
+    ],
+  },
+  {
+    id: 'knapsack',
+    label: 'DP · 0/1 배낭',
+    category: '동적 계획법',
+    stdin: '4 7\n6 13\n4 8\n3 6\n5 12',
+    expected: '14\n',
+    patterns: ['dynamic_programming'],
+    code: 'n, capacity = map(int, input().split())\nitems = [tuple(map(int, input().split())) for _ in range(n)]\ndp = [[0] * (capacity + 1) for _ in range(n + 1)]\nfor i in range(1, n + 1):\n    weight, value = items[i - 1]\n    for c in range(capacity + 1):\n        dp[i][c] = dp[i - 1][c]\n        if c >= weight:\n            # 담지 않는 경우와 담는 경우 중 더 큰 가치를 선택합니다\n            dp[i][c] = max(dp[i][c], dp[i - 1][c - weight] + value)\nprint(dp[n][capacity])',
+    samples: [
+      {
+        label: '담을 수 없음',
+        stdin: '1 2\n3 10',
+        expected: '0\n',
+      },
+      {
+        label: '정확히 채우기',
+        stdin: '2 5\n2 4\n3 7',
+        expected: '11\n',
+      },
+    ],
+  },
+  {
+    id: 'two_pointers',
+    label: '투 포인터 · 두 수의 합',
+    category: '구간 탐색',
+    stdin: '6 10\n1 2 4 6 8 9',
+    expected: '0 5\n',
+    patterns: ['two_pointers'],
+    code: 'n, target = map(int, input().split())\nvalues = list(map(int, input().split()))\nvalues.sort()\nbegin, end = 0, n - 1\nanswer = (-1, -1)\nwhile begin < end:\n    total = values[begin] + values[end]\n    if total == target:\n        answer = (begin, end)\n        break\n    elif total < target:\n        begin += 1\n    else:\n        end -= 1\nprint(*answer)',
+    samples: [
+      {
+        label: '해 없음',
+        stdin: '3 20\n1 2 3',
+        expected: '-1 -1\n',
+      },
+      {
+        label: '같은 값 두 개',
+        stdin: '2 4\n2 2',
+        expected: '0 1\n',
+      },
+    ],
+  },
+  {
+    id: 'sliding_window',
+    label: '슬라이딩 윈도우',
+    category: '구간 탐색',
+    stdin: '7 3\n2 1 5 1 3 2 4',
+    expected: '9\n',
+    patterns: ['sliding_window'],
+    code: 'n, k = map(int, input().split())\nvalues = list(map(int, input().split()))\ntotal = 0\nbest = float("-inf")\nfor right in range(n):\n    total += values[right]\n    if right >= k:\n        left = right - k\n        # 구간 밖으로 나간 값은 합에서 뺍니다\n        total -= values[left]\n    if right >= k - 1:\n        best = max(best, total)\nprint(best)',
+    samples: [
+      {
+        label: '구간 길이 1',
+        stdin: '4 1\n-3 -1 -4 -2',
+        expected: '-1\n',
+      },
+      {
+        label: '전체가 한 구간',
+        stdin: '4 4\n1 2 3 4',
+        expected: '10\n',
+      },
+    ],
+  },
+  {
+    id: 'heap',
+    label: '최소 힙',
+    category: '자료구조',
+    stdin: '6\n7 2 5 1 4 3',
+    expected: '[1, 2, 3, 4, 5, 7]\n',
+    patterns: ['heap'],
+    code: 'import heapq\nn = int(input())\nvalues = list(map(int, input().split()))\npriority = []\nfor value in values:\n    heapq.heappush(priority, value)\norder = []\nwhile priority:\n    order.append(heapq.heappop(priority))\nprint(order)',
+    samples: [
+      {
+        label: '중복 우선순위',
+        stdin: '4\n2 1 2 1',
+        expected: '[1, 1, 2, 2]\n',
+      },
+      {
+        label: '음수 포함',
+        stdin: '3\n0 -3 2',
+        expected: '[-3, 0, 2]\n',
+      },
+    ],
+  },
+  {
+    id: 'stack',
+    label: '스택 · 괄호 검사',
+    category: '자료구조',
+    stdin: '(()())',
+    expected: 'True\n',
+    patterns: ['stack'],
+    code: 'text = input().strip()\nstack = []\nvalid = True\nfor ch in text:\n    if ch == "(":\n        stack.append(ch)\n    elif ch == ")":\n        if not stack:\n            valid = False\n            break\n        stack.pop()\nprint(valid and not stack)',
+    samples: [
+      {
+        label: '닫는 괄호가 먼저',
+        stdin: ')(',
+        expected: 'False\n',
+      },
+      {
+        label: '남은 여는 괄호',
+        stdin: '(()',
+        expected: 'False\n',
+      },
+    ],
+  },
+  {
+    id: 'backtracking',
+    label: '백트래킹 · 조합',
+    category: '재귀',
+    stdin: '4 2',
+    expected: '[[1, 2], [1, 3], [1, 4], [2, 3], [2, 4], [3, 4]]\n',
+    patterns: ['backtracking'],
+    code: 'n, k = map(int, input().split())\npath = []\nanswers = []\ndef choose(start):\n    if len(path) == k:\n        answers.append(path.copy())\n        return\n    for value in range(start, n + 1):\n        path.append(value)\n        choose(value + 1)\n        # 이번 선택을 취소하고 다음 후보를 시도합니다\n        path.pop()\nchoose(1)\nprint(answers)',
+    samples: [
+      {
+        label: '하나 선택',
+        stdin: '3 1',
+        expected: '[[1], [2], [3]]\n',
+      },
+      {
+        label: '모두 선택',
+        stdin: '3 3',
+        expected: '[[1, 2, 3]]\n',
+      },
+    ],
+  },
+  {
+    id: 'frequency',
+    label: '해시 · 빈도 집계',
+    category: '문자열·해시',
+    stdin: 'banana',
+    expected: "{'b': 1, 'a': 3, 'n': 2}\n",
+    patterns: ['frequency'],
+    code: 'text = input().strip()\ncounts = {}\nfor ch in text:\n    counts[ch] = counts.get(ch, 0) + 1\nprint(counts)',
+    samples: [
+      {
+        label: '모두 같은 문자',
+        stdin: 'aaaa',
+        expected: "{'a': 4}\n",
+      },
+      {
+        label: '모두 다른 문자',
+        stdin: 'abc',
+        expected: "{'a': 1, 'b': 1, 'c': 1}\n",
+      },
+    ],
+  },
+  {
+    id: 'kmp',
+    label: 'KMP · 실패 함수',
+    category: '문자열·해시',
+    stdin: 'ababcabab\nabab',
+    expected: '[0, 5]\n',
+    patterns: ['string_matching'],
+    code: 'text = input().strip()\npattern = input().strip()\nfailure = [0] * len(pattern)\nj = 0\nfor i in range(1, len(pattern)):\n    while j > 0 and pattern[i] != pattern[j]:\n        j = failure[j - 1]\n    if pattern[i] == pattern[j]:\n        j += 1\n        failure[i] = j\nmatches = []\nj = 0\nfor i in range(len(text)):\n    while j > 0 and text[i] != pattern[j]:\n        j = failure[j - 1]\n    if text[i] == pattern[j]:\n        j += 1\n        if j == len(pattern):\n            matches.append(i - j + 1)\n            j = failure[j - 1]\nprint(matches)',
+    samples: [
+      {
+        label: '겹치는 일치',
+        stdin: 'aaaaa\naaa',
+        expected: '[0, 1, 2]\n',
+      },
+      {
+        label: '일치 없음',
+        stdin: 'abc\nxyz',
+        expected: '[]\n',
+      },
+    ],
+  },
+  {
+    id: 'bitmask',
+    label: '비트마스크 · 부분집합',
+    category: '비트 연산',
+    stdin: '3',
+    expected: '[[], [0], [1], [0, 1], [2], [0, 2], [1, 2], [0, 1, 2]]\n',
+    patterns: ['bitmask'],
+    code: 'n = int(input())\nsubsets = []\nfor mask in range(1 << n):\n    selected = []\n    for bit in range(n):\n        # 해당 비트가 켜져 있으면 원소를 포함합니다\n        if mask & (1 << bit):\n            selected.append(bit)\n    subsets.append(selected)\nprint(subsets)',
+    samples: [
+      {
+        label: '원소 1개',
+        stdin: '1',
+        expected: '[[], [0]]\n',
+      },
+      {
+        label: '공집합만',
+        stdin: '0',
+        expected: '[[]]\n',
+      },
+    ],
+  },
+  {
+    id: 'grid_bfs',
+    label: '격자 BFS · 최단거리',
+    category: '격자',
+    stdin: '3 4\n0 0 1 0\n1 0 0 0\n0 0 1 0',
+    expected: '5\n',
+    patterns: ['queue', 'grid'],
+    code: 'from collections import deque\nn, m = map(int, input().split())\ngrid = [list(map(int, input().split())) for _ in range(n)]\ndistance = [[-1] * m for _ in range(n)]\nqueue = deque([(0, 0)])\ndistance[0][0] = 0\nwhile queue:\n    r, c = queue.popleft()\n    for dr, dc in [(1, 0), (-1, 0), (0, 1), (0, -1)]:\n        nr, nc = r + dr, c + dc\n        if 0 <= nr < n and 0 <= nc < m:\n            if grid[nr][nc] == 0 and distance[nr][nc] == -1:\n                distance[nr][nc] = distance[r][c] + 1\n                queue.append((nr, nc))\nprint(distance[n - 1][m - 1])',
+    samples: [
+      {
+        label: '출발점이 도착점',
+        stdin: '1 1\n0',
+        expected: '0\n',
+      },
+      {
+        label: '막힌 경로',
+        stdin: '2 2\n0 1\n1 0',
+        expected: '-1\n',
+      },
+    ],
+  },
+];

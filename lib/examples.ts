@@ -1,4 +1,17 @@
-export const examples = [
+import { extraExamples } from './extra-examples.ts';
+import { baseCases } from './example-cases.ts';
+export type SampleCase = { label: string; stdin: string; expected: string };
+export type Example = {
+  id: string;
+  label: string;
+  category: string;
+  stdin: string;
+  code: string;
+  expected?: string;
+  patterns?: string[];
+  samples?: SampleCase[];
+};
+export const examples: Example[] = [
   {
     id: 'bubble',
     label: '버블 정렬',
@@ -111,4 +124,5 @@ for i in range(n):
 
 print(*prefix)`,
   },
-];
+  ...extraExamples,
+].map((example) => ({ ...example, ...baseCases[example.id] }));

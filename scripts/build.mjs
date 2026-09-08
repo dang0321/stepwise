@@ -21,6 +21,9 @@ for (const file of [
   'index.html',
   'python-worker.mjs',
   'tracer.py',
+  'code_analysis.py',
+  'input_samples.py',
+  'analysis-worker.mjs',
   '.nojekyll',
 ])
   await access(publicDir + '/' + file);

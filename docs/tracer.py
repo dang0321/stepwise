@@ -11,6 +11,8 @@ import time
 import tokenize
 import types
 from collections import deque
+from collections import Counter, defaultdict
+from code_analysis import CodeAnalysis
 
 FILENAME = "<stepwise>"
 MAX_STEPS = 1200
@@ -32,6 +34,7 @@ def run_trace(source, stdin_text=""):
     frame_ids, next_id = {}, 0
     pending_exceptions = set()
     last_frame = None
+    analyzer = None
     hints_by_type = {
         ast.For: "반복문에서 다음 항목을 가져와 반복할지 확인합니다.",
         ast.While: "반복 조건을 검사합니다. 참이면 반복문 안으로 들어갑니다.",
@@ -89,7 +92,7 @@ def run_trace(source, stdin_text=""):
                 if len(obj) > 80:
                     warnings.add("컨테이너는 처음 80개 항목까지만 표시합니다.")
                 return {"type": t.__name__, "items": items, "length": len(obj)}
-            if t is dict:
+            if t in (dict, Counter, defaultdict):
                 items = []
                 for index, (k, v) in enumerate(obj.items()):
                     if index >= 80:
@@ -122,11 +125,13 @@ def run_trace(source, stdin_text=""):
         frames.reverse()
         if len(frames) > 20:
             warnings.add("호출 스택은 최근 20개 프레임까지만 표시합니다.")
-        stack = [{"id": frame_ids[id(f)], "name": f.f_code.co_name, "line": f.f_lineno,
+        stack = [{"id": frame_ids[id(f)], "name": f.f_code.co_name, "scope": '<module>' if f.f_code.co_name=='<module>' else f.f_code.co_name+'@'+str(f.f_code.co_firstlineno), "line": f.f_lineno,
                   "locals": variables(f.f_locals)} for f in frames[-20:]]
         state = {"event": event, "line": frame.f_lineno if frame else None,
                  "globals": variables(namespace), "stack": stack,
                  "output": output.getvalue()}
+        if analyzer and frame and event=='line':
+            state.update(analyzer.observe(frame.f_lineno, {**namespace, **frame.f_locals}))
         if event == "return":
             state["returnValue"] = pack(value)
         if error:
@@ -162,6 +167,7 @@ def run_trace(source, stdin_text=""):
     error = None
     try:
         tree = ast.parse(source, filename=FILENAME)
+        analyzer = CodeAnalysis(source)
         source_lines = source.splitlines()
         comment_tokens = {tok.start[0]: tok.string.lstrip('# ').strip() for tok in tokenize.generate_tokens(io.StringIO(source).readline) if tok.type == tokenize.COMMENT}
         for index, source_line in enumerate(source_lines, 1):
@@ -183,6 +189,7 @@ def run_trace(source, stdin_text=""):
                     hint = "표준 입력에서 값을 읽습니다. 입력 창의 값을 순서대로 사용합니다."
                 hints[str(node.lineno)] = hint
         compiled = compile(tree, FILENAME, "exec")
+        hints.update(analyzer.hints)
         sys.stdin = input_stream
         sys.stdout = sys.stderr = BoundedOutput()
         sys.settrace(trace)
@@ -206,4 +213,5 @@ def run_trace(source, stdin_text=""):
     if not error:
         steps[-1]["line"] = None
     return {"steps": steps, "error": error, "warnings": sorted(warnings), "hints": hints, "comments": comments,
+            "analysis": analyzer.public() if analyzer else None,
             "elapsedMs": round((time.monotonic() - started) * 1000), "pythonVersion": sys.version.split()[0]}
