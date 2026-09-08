@@ -124,7 +124,8 @@ export default function Home() {
   }>({ variable: '', mode: 'auto' });
   const worker = useRef<Worker | null>(null),
     timer = useRef<ReturnType<typeof setTimeout> | null>(null),
-    codeViewport = useRef<HTMLDivElement>(null);
+    codeViewport = useRef<HTMLDivElement>(null),
+    insightViewport = useRef<HTMLDivElement>(null);
   const busy = status === 'loading' || status === 'running';
   const steps = result?.steps || [],
     step = steps[cursor],
@@ -390,6 +391,9 @@ export default function Home() {
         box.scrollTop = Math.max(0, y - box.clientHeight / 2);
     }
   }, [line, editing]);
+  useEffect(() => {
+    if (insightViewport.current) insightViewport.current.scrollTop = 0;
+  }, [cursor, result]);
   const invalidate = () => {
     setPlaying(false);
     setResult(null);
@@ -803,140 +807,156 @@ export default function Home() {
             </span>
           </div>
           <div className="visual-content">
-            <div className="visual-title">
-              <div>
-                <span className="eyebrow">
-                  {selected ? 'WATCHING VARIABLE' : 'EXECUTION CANVAS'}
-                </span>
-                <div className="variable-picker">
-                  {selected ? (
-                    <Pick
-                      value={selected}
-                      label="시각화할 변수"
-                      onChange={setVariable}
-                      items={names.map((n) => ({ value: n, label: n }))}
-                    />
-                  ) : (
-                    <h2>변수의 흐름</h2>
-                  )}
-                  <span className="type-tag">
-                    {selected
-                      ? container(vars[selected])
-                        ? vars[selected].type +
-                          (vars[selected].length !== undefined
-                            ? ' · ' + vars[selected].length + '개'
-                            : '')
-                        : typeof vars[selected]
-                      : '실행하면 나타납니다'}
-                  </span>
-                </div>
-              </div>
-              <span className="legend">
-                <i /> 변경된 값
-              </span>
-            </div>
-            {selected && (
-              <div className="view-settings">
+            <div className="visual-controls">
+              <div className="visual-title">
                 <div>
-                  <Pick
-                    label="표시 방식"
-                    value={viewMode}
-                    onChange={(v) =>
-                      setViewPreference({
-                        variable: selected,
-                        mode: v as ViewKind,
-                      })
-                    }
-                    items={[
-                      { value: 'auto', label: '자동 추천' },
-                      { value: 'cards', label: '값 카드' },
-                      { value: 'array', label: '배열 막대' },
-                      { value: 'table', label: '상태 테이블' },
-                      { value: 'graph', label: '방향 그래프' },
-                      { value: 'heap', label: '이진 힙' },
-                      { value: 'forest', label: '부모 트리' },
-                      { value: 'bits', label: '비트' },
-                    ]}
-                  />
-                  <button
-                    className="text-button"
-                    onClick={() => {
-                      setVariable('');
-                      setViewPreference({ variable: '', mode: 'auto' });
-                    }}
-                  >
-                    자동 추적으로
-                  </button>
+                  <span className="eyebrow">
+                    {selected ? 'WATCHING VARIABLE' : 'EXECUTION CANVAS'}
+                  </span>
+                  <div className="variable-picker">
+                    {selected ? (
+                      <Pick
+                        value={selected}
+                        label="시각화할 변수"
+                        onChange={setVariable}
+                        items={names.map((n) => ({ value: n, label: n }))}
+                      />
+                    ) : (
+                      <h2>변수의 흐름</h2>
+                    )}
+                    <span className="type-tag">
+                      {selected
+                        ? container(vars[selected])
+                          ? vars[selected].type +
+                            (vars[selected].length !== undefined
+                              ? ' · ' + vars[selected].length + '개'
+                              : '')
+                          : typeof vars[selected]
+                        : '실행하면 나타납니다'}
+                    </span>
+                  </div>
                 </div>
-                <p>
-                  {selectedRole
-                    ? '추천 근거: ' + selectedRole.reason
-                    : '값의 자료형에 맞춰 표시합니다. 표시 방식을 직접 바꿀 수 있어요.'}
-                </p>
+                <span className="legend">
+                  <i /> 변경된 값
+                </span>
               </div>
-            )}
-            {selected ? (
-              <Tabs defaultValue="visual" className="data-tabs">
-                <TabsList variant="line">
-                  <TabsTrigger value="visual">시각화</TabsTrigger>
-                  <TabsTrigger value="raw">원본 값</TabsTrigger>
-                </TabsList>
-                <TabsContent value="visual">
-                  <DataView
-                    value={vars[selected]}
-                    previous={oldVars[selected]}
-                    variables={vars}
-                    name={selected}
-                    role={selectedRole}
-                    mode={viewMode}
-                    focus={visibleFocus}
-                    scale={chartScale}
-                    bounds={selectedBounds}
-                  />
-                </TabsContent>
-                <TabsContent value="raw">
-                  <pre className="raw-value">{format(vars[selected])}</pre>
-                </TabsContent>
-              </Tabs>
-            ) : (
-              <div className="canvas-empty">
-                {busy ? (
-                  <LoaderCircle className="spin" size={25} />
-                ) : (
-                  <Workflow size={29} />
-                )}
-                <strong>
-                  {busy
-                    ? '코드의 흐름을 기록하고 있어요'
-                    : '아직 만들어진 변수가 없습니다'}
-                </strong>
-                <p>
-                  {busy
-                    ? '첫 준비에는 잠시 시간이 걸릴 수 있어요.'
-                    : '다음 줄로 이동하거나 코드를 실행해주세요.'}
-                </p>
-              </div>
-            )}
-            {selected &&
-              structures.filter((n) => n !== selected).length > 0 && (
-                <div className="related-values" aria-label="함께 볼 자료구조">
-                  {structures
-                    .filter((n) => n !== selected)
-                    .sort(
-                      (a, b) =>
-                        (roleFor(b)?.priority || 0) -
-                        (roleFor(a)?.priority || 0),
-                    )
-                    .slice(0, 3)
-                    .map((n) => (
-                      <button key={n} onClick={() => setVariable(n)}>
-                        <code>{n}</code>
-                        <span>{format(vars[n])}</span>
-                      </button>
-                    ))}
+              {selected && (
+                <div className="view-settings">
+                  <div>
+                    <Pick
+                      label="표시 방식"
+                      value={viewMode}
+                      onChange={(v) =>
+                        setViewPreference({
+                          variable: selected,
+                          mode: v as ViewKind,
+                        })
+                      }
+                      items={[
+                        { value: 'auto', label: '자동 추천' },
+                        { value: 'cards', label: '값 카드' },
+                        { value: 'array', label: '배열 막대' },
+                        { value: 'table', label: '상태 테이블' },
+                        { value: 'graph', label: '방향 그래프' },
+                        { value: 'heap', label: '이진 힙' },
+                        { value: 'forest', label: '부모 트리' },
+                        { value: 'bits', label: '비트' },
+                      ]}
+                    />
+                    <button
+                      className="text-button"
+                      onClick={() => {
+                        setVariable('');
+                        setViewPreference({ variable: '', mode: 'auto' });
+                      }}
+                    >
+                      자동 추적으로
+                    </button>
+                  </div>
+                  <p>
+                    {selectedRole
+                      ? '추천 근거: ' + selectedRole.reason
+                      : '값의 자료형에 맞춰 표시합니다. 표시 방식을 직접 바꿀 수 있어요.'}
+                  </p>
                 </div>
               )}
+            </div>
+            <div className="visual-stage">
+              {selected ? (
+                <Tabs defaultValue="visual" className="data-tabs">
+                  <TabsList variant="line">
+                    <TabsTrigger value="visual">시각화</TabsTrigger>
+                    <TabsTrigger value="raw">원본 값</TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="visual">
+                    <DataView
+                      value={vars[selected]}
+                      previous={oldVars[selected]}
+                      variables={vars}
+                      name={selected}
+                      role={selectedRole}
+                      mode={viewMode}
+                      focus={visibleFocus}
+                      scale={chartScale}
+                      bounds={selectedBounds}
+                    />
+                  </TabsContent>
+                  <TabsContent value="raw">
+                    <pre className="raw-value">{format(vars[selected])}</pre>
+                  </TabsContent>
+                </Tabs>
+              ) : (
+                <div className="canvas-empty">
+                  {busy ? (
+                    <LoaderCircle className="spin" size={25} />
+                  ) : (
+                    <Workflow size={29} />
+                  )}
+                  <strong>
+                    {busy
+                      ? '코드의 흐름을 기록하고 있어요'
+                      : '아직 만들어진 변수가 없습니다'}
+                  </strong>
+                  <p>
+                    {busy
+                      ? '첫 준비에는 잠시 시간이 걸릴 수 있어요.'
+                      : '다음 줄로 이동하거나 코드를 실행해주세요.'}
+                  </p>
+                </div>
+              )}
+            </div>
+            <div className="related-slot">
+              {selected &&
+                structures.filter((n) => n !== selected).length > 0 && (
+                  <div className="related-values" aria-label="함께 볼 자료구조">
+                    {structures
+                      .filter((n) => n !== selected)
+                      .sort(
+                        (a, b) =>
+                          (roleFor(b)?.priority || 0) -
+                          (roleFor(a)?.priority || 0),
+                      )
+                      .slice(0, 3)
+                      .map((n) => (
+                        <button key={n} onClick={() => setVariable(n)}>
+                          <code>{n}</code>
+                          <span>{format(vars[n])}</span>
+                        </button>
+                      ))}
+                  </div>
+                )}
+            </div>
+          </div>
+          <section
+            className="execution-explanation"
+            aria-label="다음 실행과 원본 주석"
+          >
             <div
+              ref={insightViewport}
+              // Let keyboard users scroll long explanations without moving the canvas.
+              // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+              tabIndex={0}
+              aria-label="현재 단계 설명과 주석"
               className={
                 'step-insight ' +
                 (step?.event === 'error' ? 'insight-error' : '')
@@ -954,6 +974,7 @@ export default function Home() {
               <div>
                 <strong>{insightTitle}</strong>
                 <p>{insightBody}</p>
+                {comment && <p className="source-comment"># {comment}</p>}
                 {step?.condition && (
                   <p className="condition-result">
                     현재 값으로 조건 검사 →{' '}
@@ -973,26 +994,9 @@ export default function Home() {
                     ))}
                   </div>
                 )}
-                {comment && <p className="source-comment"># {comment}</p>}
               </div>
             </div>
-            {differences.length > 0 && (
-              <div className="change-summary">
-                <span>직전 단계와 비교</span>
-                {differences.slice(0, 4).map((k) => (
-                  <div key={k}>
-                    <code>{k}</code>
-                    <span>{format(oldVars[k]).slice(0, 65)}</span>
-                    <ArrowRight size={12} />
-                    <strong>{format(vars[k]).slice(0, 65)}</strong>
-                  </div>
-                ))}
-                {differences.length > 4 && (
-                  <small>외 {differences.length - 4}개 변수 변경</small>
-                )}
-              </div>
-            )}
-          </div>
+          </section>
           <div className="details-grid">
             <div>
               <div className="detail-heading">
@@ -1024,6 +1028,22 @@ export default function Home() {
                       {f.name === '<module>' ? 'main' : f.name}
                     </span>
                   ))}
+                </div>
+              )}
+              {differences.length > 0 && (
+                <div className="change-summary">
+                  <span>직전 단계와 비교</span>
+                  {differences.slice(0, 4).map((k) => (
+                    <div key={k}>
+                      <code>{k}</code>
+                      <span>{format(oldVars[k]).slice(0, 65)}</span>
+                      <ArrowRight size={12} />
+                      <strong>{format(vars[k]).slice(0, 65)}</strong>
+                    </div>
+                  ))}
+                  {differences.length > 4 && (
+                    <small>외 {differences.length - 4}개 변수 변경</small>
+                  )}
                 </div>
               )}
               <div className="variable-list">
