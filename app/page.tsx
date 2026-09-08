@@ -31,7 +31,15 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DataView } from '@/components/data-view';
 import { InputSamples } from '@/components/input-samples';
-import { extent, type Role, type ViewKind } from '@/lib/visual-model';
+import {
+  extent,
+  compatibleView,
+  recommendView,
+  globalFocus,
+  VIEW_LABELS,
+  type Role,
+  type ViewKind,
+} from '@/lib/visual-model';
 import { examples } from '@/lib/examples';
 import { changed, container, format, type TraceResult } from '@/lib/trace';
 
@@ -127,6 +135,7 @@ export default function Home() {
     codeViewport = useRef<HTMLDivElement>(null),
     insightViewport = useRef<HTMLDivElement>(null);
   const busy = status === 'loading' || status === 'running';
+  const stepCount = result?.steps.length || 0;
   const steps = result?.steps || [],
     step = steps[cursor],
     previous = steps[cursor - 1];
@@ -147,15 +156,9 @@ export default function Home() {
   const scopeId = actualFrame?.scope || '<module>';
   const roles = result?.analysis?.roles || {};
   function roleFor(name: string): Role | undefined {
-    const local = roles[scopeId]?.[name];
-    if (local) return local;
-    if (
-      scopeId !== '<module>' &&
-      actualFrame &&
-      Object.hasOwn(actualFrame.locals, name)
-    )
-      return undefined;
-    return roles['<module>']?.[name];
+    if (actualFrame && Object.hasOwn(actualFrame.locals, name))
+      return actualFrame.roles?.[name] || roles[scopeId]?.[name];
+    return step?.roles?.[name] || roles['<module>']?.[name];
   }
   const preferred: Record<string, string> = {
     dijkstra: 'graph',
@@ -183,10 +186,16 @@ export default function Home() {
   const ranked = [...names].sort((a, b) => {
     const score = (name: string) => {
       const r = roleFor(name);
+      const supported = r && compatibleView(vars[name], r.view, r);
       return (
-        (r?.priority || 0) * 10 +
-        (r?.view === preferredView ? 100 : 0) +
-        (step?.focus?.some((f) => f.variable === name) ? 3 : 0) +
+        (supported ? r.priority : 0) * 10 +
+        (supported && r.origin === 'code' ? 2 : 0) +
+        (supported && r.view === preferredView ? 100 : 0) +
+        (step?.focus?.some(
+          (f) => f.variable === name || f.aliases?.includes(name),
+        )
+          ? 3
+          : 0) +
         (structures.includes(name) ? 1 : 0)
       );
     };
@@ -196,6 +205,9 @@ export default function Home() {
   const viewMode =
     viewPreference.variable === selected ? viewPreference.mode : 'auto';
   const selectedRole = roleFor(selected);
+  const recommendation = selected
+    ? recommendView(vars[selected], selectedRole, viewMode)
+    : null;
   const selectedBounds =
     result?.analysis?.bounds[scopeId]?.[selected] ||
     (scopeId === '<module>' ||
@@ -208,11 +220,11 @@ export default function Home() {
     actualFrame?.id === topFrame?.id
       ? step?.focus || []
       : !actualFrame
-        ? (step?.focus || []).filter(
-            (f) =>
-              topFrame?.name === '<module>' ||
-              !topFrame ||
-              !Object.hasOwn(topFrame.locals, f.variable),
+        ? globalFocus(
+            step?.focus || [],
+            topFrame?.name === '<module>'
+              ? []
+              : Object.keys(topFrame?.locals || {}),
           )
         : [];
   const selectedFrameId =
@@ -348,15 +360,15 @@ export default function Home() {
   const move = useCallback(
     (delta: number) => {
       setPlaying(false);
-      setCursor((n) => Math.max(0, Math.min(steps.length - 1, n + delta)));
+      setCursor((n) => Math.max(0, Math.min(stepCount - 1, n + delta)));
     },
-    [steps.length],
+    [stepCount],
   );
   const togglePlay = useCallback(() => {
-    if (steps.length < 2 || busy) return;
-    if (cursor >= steps.length - 1) setCursor(0);
+    if (stepCount < 2 || busy) return;
+    if (cursor >= stepCount - 1) setCursor(0);
     setPlaying((x) => !x);
-  }, [steps.length, busy, cursor]);
+  }, [stepCount, busy, cursor]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -852,16 +864,17 @@ export default function Home() {
                           mode: v as ViewKind,
                         })
                       }
-                      items={[
-                        { value: 'auto', label: '자동 추천' },
-                        { value: 'cards', label: '값 카드' },
-                        { value: 'array', label: '배열 막대' },
-                        { value: 'table', label: '상태 테이블' },
-                        { value: 'graph', label: '방향 그래프' },
-                        { value: 'heap', label: '이진 힙' },
-                        { value: 'forest', label: '부모 트리' },
-                        { value: 'bits', label: '비트' },
-                      ]}
+                      items={Object.entries(VIEW_LABELS)
+                        .filter(
+                          ([v]) =>
+                            v === viewMode ||
+                            compatibleView(
+                              vars[selected],
+                              v as ViewKind,
+                              selectedRole,
+                            ),
+                        )
+                        .map(([value, label]) => ({ value, label }))}
                     />
                     <button
                       className="text-button"
@@ -874,9 +887,12 @@ export default function Home() {
                     </button>
                   </div>
                   <p>
-                    {selectedRole
-                      ? '추천 근거: ' + selectedRole.reason
-                      : '값의 자료형에 맞춰 표시합니다. 표시 방식을 직접 바꿀 수 있어요.'}
+                    {recommendation &&
+                      VIEW_LABELS[recommendation.view] +
+                        ' · ' +
+                        recommendation.reason}
+                    {!!selectedRole?.aliases?.length &&
+                      ' · 같은 자료구조: ' + selectedRole.aliases.join(', ')}
                   </p>
                 </div>
               )}

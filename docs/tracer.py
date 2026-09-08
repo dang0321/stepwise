@@ -130,8 +130,18 @@ def run_trace(source, stdin_text=""):
         state = {"event": event, "line": frame.f_lineno if frame else None,
                  "globals": variables(namespace), "stack": stack,
                  "output": output.getvalue()}
+        if analyzer:
+            contexts=[('global','<module>',namespace)]+[(str(frame_ids[id(f)]),'<module>' if f.f_code.co_name=='<module>' else f.f_code.co_name+'@'+str(f.f_code.co_firstlineno),f.f_locals) for f in frames[-20:]]
+            resolved=analyzer.runtime_roles(contexts)
+            state['roles']=resolved['global']
+            for item in stack:item['roles']=resolved[str(item['id'])]
         if analyzer and frame and event=='line':
-            state.update(analyzer.observe(frame.f_lineno, {**namespace, **frame.f_locals}))
+            visible={**namespace, **frame.f_locals}
+            state.update(analyzer.observe(frame.f_lineno, visible))
+            for access in state['focus']:
+                obj=visible.get(access['variable'])
+                if type(obj) in (list,tuple,dict,set,frozenset,deque,Counter,defaultdict):
+                    access['aliases']=[name for name,value in visible.items() if name!=access['variable'] and not name.startswith('__') and value is obj][:8]
         if event == "return":
             state["returnValue"] = pack(value)
         if error:

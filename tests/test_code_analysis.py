@@ -97,7 +97,120 @@ class AnalysisTests(unittest.TestCase):
     def test_bitmask_loop_role(self):
         a=CodeAnalysis('for subset in range(1<<size):\n    print(subset)')
         self.assertEqual(a.roles['<module>']['subset']['view'],'bits')
+        self.assertEqual(a.roles['<module>']['subset']['widthVariable'],'size')
 
     def test_countdown_in_bfs_not_topological(self):
         source='q.popleft()\ng[u].append(v)\nfor v in g[u]:\n    capacity[v]-=1\n    q.append(v)'
         self.assertNotIn('topological',self.ids(source))
+
+class RuntimeRoleTests(unittest.TestCase):
+    def trace(self,code):
+        from tracer import run_trace
+        r=run_trace(code)
+        self.assertIsNone(r['error'],r['error'])
+        return r
+
+    def test_function_parameter_reaches_global_alias(self):
+        r=self.trace('import heapq\ndata=[4,2,3]\ncopy=data\ndef prepare(bucket):\n    heapq.heapify(bucket)\nprepare(data)\nprint(copy)')
+        last=r['steps'][-1]
+        self.assertEqual(last['roles']['data']['view'],'heap')
+        self.assertEqual(last['roles']['copy']['origin'],'shared')
+        self.assertIn('copy',last['roles']['data']['aliases'])
+        self.assertTrue(any(s['stack'] and s['stack'][-1]['name']=='prepare' and s['stack'][-1]['roles']['bucket']['view']=='heap' for s in r['steps']))
+
+    def test_equal_copy_does_not_inherit_identity(self):
+        r=self.trace('import heapq\ndata=[4,2,3]\ncopy=data.copy()\nheapq.heapify(data)')
+        self.assertNotIn('copy',r['steps'][-1]['roles'])
+
+    def test_rebinding_alias_breaks_link(self):
+        r=self.trace('import heapq\ndata=[4,2,3]\nother=data\nheapq.heapify(data)\nother=[8,9]')
+        self.assertNotIn('other',r['steps'][-1]['roles'])
+
+    def test_returned_container_keeps_learned_role(self):
+        r=self.trace('import heapq\ndef make():\n    items=[3,1,2]\n    heapq.heapify(items)\n    return items\nanswer=make()')
+        self.assertEqual(r['steps'][-1]['roles']['answer']['view'],'heap')
+
+    def test_alias_read_focus(self):
+        r=self.trace('items=[2,3]\nalias=items\ni=1\nvalue=alias[i]')
+        focus=next(s['focus'][0] for s in r['steps'] if s['line']==4 and s['event']=='line')
+        self.assertEqual(focus['variable'],'alias')
+        self.assertIn('items',focus['aliases'])
+
+    def test_runtime_cache_is_bounded(self):
+        from code_analysis import CodeAnalysis
+        a=CodeAnalysis('import heapq\nheapq.heapify(items)')
+        for _ in range(100):
+            a.runtime_roles([('global','<module>',{'items':[]})])
+        self.assertLessEqual(len(a.role_cache),64)
+
+    def test_custom_object_is_not_inspected(self):
+        class Trap:
+            def __eq__(self,other):raise AssertionError('no equality calls')
+            def __iter__(self):raise AssertionError('no iteration calls')
+        a=CodeAnalysis('print(items)')
+        self.assertEqual(a.runtime_roles([('global','<module>',{'items':Trap()})])['global'],{})
+
+    def test_graph_function_parameter(self):
+        r=self.trace('from collections import deque\ndef walk(links):\n    pending=deque([0])\n    seen=[False]*len(links)\n    while pending:\n        point=pending.popleft()\n        for other in links[point]:\n            if not seen[other]:\n                seen[other]=True\n                pending.append(other)\nconnections=[[1],[]]\nwalk(connections)')
+        self.assertIn('bfs',{c['id'] for c in r['analysis']['candidates']})
+        self.assertEqual(r['steps'][-1]['roles']['connections']['view'],'graph')
+
+    def test_recursive_frames_keep_local_identity(self):
+        r=self.trace('import heapq\ndef visit(n):\n    bucket=[n]\n    heapq.heapify(bucket)\n    if n: visit(n-1)\nvisit(2)')
+        s=next(s for s in r['steps'] if len(s['stack'])==4 and 'bucket' in s['stack'][-1]['locals'])
+        self.assertTrue(all(f['roles'].get('bucket',{}).get('aliases',[])==[] for f in s['stack'][1:]))
+
+class UserCodePatterns(unittest.TestCase):
+    def test_pop_zero_is_queue(self):
+        a=CodeAnalysis('pending.append(1)\nvalue=pending.pop(0)')
+        self.assertEqual(a.roles['<module>']['pending']['view'],'queue')
+
+    def test_unrelated_custom_heappush_not_heap(self):
+        a=CodeAnalysis('def heappush(items,x):\n    items.append(x)\nheappush(values,3)')
+        self.assertNotIn('heap',{c['id'] for c in a.candidates})
+        self.assertIn('heappush(values, 3)',a.hints['3'])
+
+    def test_reversed_weighted_tuple(self):
+        a=CodeAnalysis('links[u].append((weight,v))\nfor cost,destination in links[origin]:\n    if cost<distance[destination]:\n        distance[destination]=cost')
+        r=a.roles['<module>']['links']
+        self.assertEqual(r['neighborIndex'],1)
+        self.assertEqual(r['bindings']['neighbor'],'destination')
+        self.assertIn('distance',r['related'])
+
+    def test_dict_of_dict_graph(self):
+        a=CodeAnalysis('edges={"A":{"B":2},"B":{}}\nfor neighbor,cost in edges[point].items():\n    print(cost)')
+        self.assertEqual(a.roles['<module>']['edges']['view'],'graph')
+
+    def test_short_circuit_and(self):
+        a=CodeAnalysis('if i<len(a) and a[i]>0:\n    pass')
+        r=a.observe(1,{'i':0,'a':[]})
+        self.assertEqual(r['focus'],[])
+        self.assertIs(r['condition']['value'],False)
+
+    def test_short_circuit_or(self):
+        a=CodeAnalysis('if ready or a[i]>0:\n    pass')
+        self.assertEqual(a.observe(1,{'ready':True,'a':[1],'i':0})['focus'],[])
+
+    def test_conditional_expression(self):
+        a=CodeAnalysis('x=a[i] if ok else b[j]')
+        f=a.observe(1,{'ok':False,'i':0,'j':1})['focus']
+        self.assertEqual([x['variable'] for x in f],['b'])
+
+    def test_compound_call_stops_later_prediction(self):
+        a=CodeAnalysis('x=advance()+items[i]')
+        self.assertEqual(a.observe(1,{'i':0})['focus'],[])
+
+    def test_comprehension_not_using_outer_index(self):
+        a=CodeAnalysis('x=[data[i] for i in range(3)]')
+        self.assertEqual(a.observe(1,{'i':9})['focus'],[])
+
+    def test_chained_comparison_short_circuit(self):
+        a=CodeAnalysis('if a[i]<0<b[j]:\n    pass')
+        r=a.observe(1,{'a':[2],'b':[],'i':0,'j':0})
+        f=r['focus']
+        self.assertEqual([x['variable'] for x in f],['a'])
+        self.assertIs(r['condition']['value'],False)
+
+    def test_called_receiver_is_not_evaluated_twice(self):
+        a=CodeAnalysis('factory().consume(items[i])')
+        self.assertEqual(a.observe(1,{'i':0})['focus'],[])

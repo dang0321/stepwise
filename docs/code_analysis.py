@@ -1,7 +1,7 @@
 """Explain supported Python AST patterns; no eval/exec, probabilistic scores or AI claims."""
 import ast
 import operator
-from collections import deque
+from collections import deque, Counter, defaultdict
 
 UNKNOWN = object()
 
@@ -25,6 +25,17 @@ def safe_value(node, values, budget=None):
     primitive=(int,float,str,bool,type(None))
     if isinstance(node,ast.Constant) and type(node.value) in primitive:return node.value
     if isinstance(node,ast.Name):return values.get(node.id,UNKNOWN)
+    if isinstance(node,ast.BoolOp):
+        for child in node.values:
+            value=get(child)
+            if type(value) not in primitive:return UNKNOWN
+            if isinstance(node.op,ast.And) and not value:return value
+            if isinstance(node.op,ast.Or) and value:return value
+        return value
+    if isinstance(node,ast.IfExp):
+        test=get(node.test)
+        if type(test) not in primitive:return UNKNOWN
+        return get(node.body if test else node.orelse)
     if isinstance(node,ast.Subscript):
         obj,key=get(node.value),get(node.slice)
         if type(obj) not in (list,tuple,dict,str,deque) or type(key) not in (int,str):return UNKNOWN
@@ -49,12 +60,62 @@ def safe_value(node, values, budget=None):
             if isinstance(node.op,ast.Invert) and type(v) is int:return ~v
         except (TypeError,ValueError):pass
     if isinstance(node,ast.Compare):
-        vals=[get(node.left)]+[get(n) for n in node.comparators]
-        if any(type(x) not in primitive for x in vals):return UNKNOWN
         ops={ast.Eq:operator.eq,ast.NotEq:operator.ne,ast.Lt:operator.lt,ast.LtE:operator.le,ast.Gt:operator.gt,ast.GtE:operator.ge,ast.Is:operator.is_,ast.IsNot:operator.is_not}
-        try:return all(ops[type(op)](vals[i],vals[i+1]) for i,op in enumerate(node.ops))
+        left=get(node.left)
+        try:
+            for op,expression in zip(node.ops,node.comparators):
+                right=get(expression)
+                if type(left) not in primitive or type(right) not in primitive:return UNKNOWN
+                if not ops[type(op)](left,right):return False
+                left=right
+            return True
         except (KeyError,TypeError):return UNKNOWN
     return UNKNOWN
+
+
+def planned_accesses(node, values):
+    """Follow expression order and short-circuiting; stop after unknown side effects."""
+    accesses=[]
+    def visit(current, prefix=False):
+        if isinstance(current,(ast.ListComp,ast.SetComp,ast.DictComp,ast.GeneratorExp,ast.Lambda,ast.NamedExpr)):
+            return True
+        if isinstance(current,ast.BoolOp):
+            for child in current.values:
+                if visit(child):return True
+                value=safe_value(child,values)
+                if type(value) not in (int,float,str,bool,type(None)):return True
+                if isinstance(current.op,ast.And) and not value:return False
+                if isinstance(current.op,ast.Or) and value:return False
+            return False
+        if isinstance(current,ast.IfExp):
+            if visit(current.test):return True
+            test=safe_value(current.test,values)
+            if type(test) not in (int,float,str,bool,type(None)):return True
+            return visit(current.body if test else current.orelse)
+        if isinstance(current,ast.Compare):
+            left=current.left
+            if visit(left):return True
+            for op,right in zip(current.ops,current.comparators):
+                if visit(right):return True
+                result=safe_value(ast.Compare(left=left,ops=[op],comparators=[right]),values)
+                if result is False:return False
+                if result is UNKNOWN:return True
+                left=right
+            return False
+        if isinstance(current,ast.Subscript):
+            if visit(current.value,True) or visit(current.slice):return True
+            if not prefix:accesses.append(current)
+            return False
+        if isinstance(current,ast.Call):
+            if visit(current.func):return True
+            for arg in [*current.args,*(k.value for k in current.keywords)]:
+                if visit(arg):return True
+            return not (isinstance(current.func,ast.Name) and current.func.id=='len' and 'len' not in values)
+        for child in ast.iter_child_nodes(current):
+            if visit(child):return True
+        return False
+    uncertain=visit(node)
+    return accesses,uncertain
 
 class CodeAnalysis:
     def __init__(self,source):
@@ -66,6 +127,7 @@ class CodeAnalysis:
         self.scopes={}
         self.aliases={}
         self.bounds={}
+        self.role_cache={}
         self._walk(self.tree,'<module>')
         self._detect()
         self.hints={}
@@ -79,6 +141,8 @@ class CodeAnalysis:
             elif isinstance(node,ast.Expr) and isinstance(node.value,ast.Call):
                 call=node.value;name=self.canonical(call.func)
                 hint={"heappush":"힙에 원소를 넣고 힙 순서를 복구합니다.","heappop":"힙의 최솟값을 꺼내고 힙 순서를 복구합니다.","popleft":"큐의 앞에서 원소를 꺼냅니다.","append":"자료구조의 뒤에 원소를 추가합니다.","pop":"지정 위치의 원소를 꺼냅니다.","print":"현재 값을 출력합니다."}.get(name.split('.')[-1],"호출: "+ast.unparse(call))
+                if name.split('.')[-1] in ('heappush','heappop') and not name.startswith('heapq.'):
+                    hint='호출: '+ast.unparse(call)
             else:hint=text
             self.hints[str(line)]=hint
 
@@ -129,30 +193,42 @@ class CodeAnalysis:
                 name,_=root_access(c.func.value)
                 adjacency.append(c)
                 self.role(c,name,'graph','정점별 컨테이너에 이웃을 추가하는 구문',4)
-        graph_names={root_access(c.func.value)[0] for c in adjacency}
+        graph_names={(self.scopes[id(c)],root_access(c.func.value)[0]) for c in adjacency}
         for a in assignments:
-            if isinstance(a,ast.Assign) and isinstance(a.value,ast.Dict) and all(isinstance(v,(ast.List,ast.Tuple)) for v in a.value.values):
-                graph_names.update(t.id for t in a.targets if isinstance(t,ast.Name))
+            if isinstance(a,ast.Assign) and isinstance(a.value,ast.Dict) and all(isinstance(v,(ast.List,ast.Tuple,ast.Dict)) for v in a.value.values):
+                graph_names.update((self.scopes[id(a)],t.id) for t in a.targets if isinstance(t,ast.Name))
+        traversal_scopes={scope for (scope,_),ops in methods.items() if 'popleft' in ops or any(len(c.args)==1 and isinstance(c.args[0],ast.Constant) and c.args[0].value==0 for c in ops.get('pop',[]))}|{fn.name+'@'+str(fn.lineno) for fn in rec}
         for n in nodes:
-            if isinstance(n,ast.For) and isinstance(n.iter,ast.Subscript):
-                name,indices=root_access(n.iter)
-                if len(indices)==1 and name in graph_names:
+            if isinstance(n,ast.For):
+                iterator=n.iter.func.value if isinstance(n.iter,ast.Call) and isinstance(n.iter.func,ast.Attribute) and n.iter.func.attr=='items' else n.iter
+                name,indices=root_access(iterator)
+                targets=n.target.elts if isinstance(n.target,(ast.Tuple,ast.List)) else [n.target]
+                if not targets:continue
+                index_names=[x.slice.id for b in n.body for x in ast.walk(b) if isinstance(x,ast.Subscript) and isinstance(x.slice,ast.Name)]
+                uses_neighbors=any(isinstance(t,ast.Name) and t.id in index_names for t in targets)
+                known=(self.scopes[id(n)],name) in graph_names or ('<module>',name) in graph_names
+                if len(indices)==1 and (known or self.scopes[id(n)] in traversal_scopes and uses_neighbors):
                     self.role(n,name,'graph','정점의 이웃 목록을 순회하는 구문',3)
                     bindings={}
                     if isinstance(indices[0],ast.Name):bindings['current']=indices[0].id
-                    target=n.target.elts[0] if isinstance(n.target,(ast.Tuple,ast.List)) and n.target.elts else n.target
+                    neighbor_index=max(range(len(targets)),key=lambda i:index_names.count(targets[i].id) if isinstance(targets[i],ast.Name) else 0)
+                    target=targets[neighbor_index]
                     if isinstance(target,ast.Name):bindings['neighbor']=target.id
                     entry=self.roles.setdefault(self.scopes[id(n)],{}).get(name)
-                    if entry:entry['bindings']=bindings
+                    if entry:
+                        entry['bindings']=bindings
+                        if len(targets)==2:entry['neighborIndex']=neighbor_index
+                        entry['related'] = list(dict.fromkeys(root_access(x)[0] for b in n.body for x in ast.walk(b) if isinstance(x,ast.Subscript) and isinstance(x.slice,ast.Name) and isinstance(target,ast.Name) and x.slice.id==target.id and root_access(x)[0] not in (None,name)))[:3]
                     adjacency.append(n)
         queues=[]
         stacks=[]
         for (scope,name),ops in methods.items():
-            if 'popleft' in ops:
-                queues.extend(ops['popleft']);self.role(ops['popleft'][0],name,'queue','popleft()로 앞에서 꺼내는 FIFO 동작',5)
+            front_pops=ops.get('popleft',[])+[c for c in ops.get('pop',[]) if len(c.args)==1 and isinstance(c.args[0],ast.Constant) and c.args[0].value==0]
+            if front_pops:
+                queues.extend(front_pops);self.role(front_pops[0],name,'queue','앞에서 꺼내는 FIFO 동작 (popleft 또는 pop(0))',5)
             elif 'append' in ops and 'pop' in ops and all(not c.args for c in ops['pop']):
                 stacks.extend(ops['pop']);self.role(ops['pop'][0],name,'stack','append()와 인자 없는 pop()의 LIFO 동작',5)
-        heaps=[c for c in calls if self.canonical(c.func).split('.')[-1] in ('heappush','heappop','heapify')]
+        heaps=[c for c in calls if self.canonical(c.func) in ('heapq.heappush','heapq.heappop','heapq.heapify')]
         for c in heaps:
             if c.args and isinstance(c.args[0],ast.Name):self.role(c,c.args[0].id,'heap','heapq 연산이 이 컨테이너를 사용',7)
         dp=[];prefix=[];parents=[];frequencies=[];sorts=[];grid=[];relax=[];indeg=[]
@@ -257,6 +333,8 @@ class CodeAnalysis:
         for loop in [n for n in nodes if isinstance(n,ast.For) and isinstance(n.target,ast.Name)]:
             if any(isinstance(x,ast.BinOp) and isinstance(x.op,ast.LShift) for x in ast.walk(loop.iter)):
                 self.role(loop,loop.target.id,'bits','비트 이동으로 정한 범위의 마스크를 순회',6)
+                widths=[x.right.id for x in ast.walk(loop.iter) if isinstance(x,ast.BinOp) and isinstance(x.op,ast.LShift) and isinstance(x.right,ast.Name)]
+                if widths:self.roles[self.scopes[id(loop)]][loop.target.id]['widthVariable']=widths[0]
         # String values are recognized by runtime as well; KMP fallback links have a distinctive subscript recurrence.
         string_matching=[]
         for n in assignments:
@@ -282,7 +360,8 @@ class CodeAnalysis:
         recursive_stacks=[s for s in stacks if self.scopes[id(s)] in recursive_scopes]
         recursive_adjacency=[s for s in adjacency if self.scopes[id(s)] in recursive_scopes]
         self.candidate('backtracking','백트래킹',rec+recursive_stacks if recursive_stacks else [],'같은 재귀 함수에서 선택 추가·복구가 나타납니다.',10)
-        self.candidate('bfs','너비 우선 탐색',queues+adjacency if queues and adjacency else [],'FIFO 큐와 이웃 순회가 함께 나타납니다.',9)
+        bfs_scopes={self.scopes[id(q)] for q in queues}&{self.scopes[id(a)] for a in adjacency}
+        self.candidate('bfs','너비 우선 탐색',[x for x in queues+adjacency if self.scopes[id(x)] in bfs_scopes],'같은 범위에서 FIFO 큐와 이웃 순회가 나타납니다.',9)
         self.candidate('dfs','깊이 우선 탐색',rec+recursive_adjacency if recursive_adjacency and not parents else [],'재귀 함수에서 이웃을 순회합니다.',9)
         self.candidate('grid_bfs','격자 너비 우선 탐색',queues+grid if queues and grid and not adjacency else [],'FIFO 큐와 행·열 좌표 접근이 함께 나타납니다.',10)
         self.candidate('dynamic_programming','동적 계획법',dp,'이전 상태를 참조하는 테이블 갱신식을 찾았습니다.',9)
@@ -315,16 +394,48 @@ class CodeAnalysis:
         elif isinstance(node,(ast.Expr,ast.Return)) and node.value is not None:exprs=[node.value]
         result={"focus":[]}
         for expr in exprs:
-            nested={id(x.value) for x in ast.walk(expr) if isinstance(x,ast.Subscript) and isinstance(x.value,ast.Subscript)}
-            for access in ast.walk(expr):
-                if not isinstance(access,ast.Subscript) or id(access) in nested:continue
+            accesses,uncertain=planned_accesses(expr,values)
+            for access in accesses:
                 name,indices=root_access(access)
                 resolved=[safe_value(i,values) for i in indices]
                 if name and resolved and all(type(v) in (int,str) for v in resolved):
                     item={"variable":name,"indices":resolved,"kind":"write" if isinstance(access.ctx,ast.Store) else "read","expression":ast.unparse(access)}
                     if item not in result["focus"]:result["focus"].append(item)
+            if uncertain:break
         result["focus"]=result["focus"][:12]
         if isinstance(node,(ast.If,ast.While)):
             value=safe_value(node.test,values)
             if type(value) is bool:result["condition"]={"expression":ast.unparse(node.test),"value":value}
         return result
+
+    def runtime_roles(self, contexts):
+        """Associate exact builtin container identities, without inspecting user objects."""
+        shared_types=(list,tuple,dict,set,frozenset,deque,Counter,defaultdict)
+        records=[]
+        for key,scope,values in contexts:
+            visible=[(n,v) for n,v in values.items() if not n.startswith('__')][:40]
+            for name,obj in visible:
+                direct=self.roles.get(scope,{}).get(name)
+                if direct and type(obj) in shared_types:
+                    cached=self.role_cache.get(id(obj))
+                    if cached is None or cached[0] is not obj or direct['priority']>=cached[1]['priority']:
+                        transferable={k:v for k,v in direct.items() if k not in ('bindings','related')}
+                        self.role_cache[id(obj)]=(obj,transferable,name)
+                records.append((key,scope,name,obj,direct))
+        # Keep references to prevent object-id reuse; bound retained metadata and objects.
+        while len(self.role_cache)>64:
+            del self.role_cache[next(iter(self.role_cache))]
+        resolved={key:{} for key,_,_ in contexts}
+        for key,scope,name,obj,direct in records:
+            cached=self.role_cache.get(id(obj)) if type(obj) in shared_types else None
+            inherited=cached[1] if cached and cached[0] is obj else None
+            if direct and (inherited is None or direct['priority']>=inherited['priority']):
+                role={**direct,'origin':'code'}
+            elif inherited:
+                role={**inherited,'origin':'shared','reason':inherited['reason']+' · '+cached[2]+'와 같은 자료구조를 참조'}
+            else:
+                continue
+            if type(obj) in shared_types:
+                role['aliases']=[other for k,_,other,value,_ in records if k==key and other!=name and value is obj][:8]
+            resolved[key][name]=role
+        return resolved

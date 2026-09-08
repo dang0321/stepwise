@@ -1,4 +1,4 @@
-import type { Analysis, Focus } from './visual-model.ts';
+import type { Analysis, Focus, Role } from './visual-model.ts';
 export type Value =
   | null
   | boolean
@@ -16,11 +16,13 @@ export type Frame = {
   scope?: string;
   line: number;
   locals: Record<string, Value>;
+  roles?: Record<string, Role>;
 };
 export type Step = {
   event: 'line' | 'return' | 'done' | 'error';
   line: number | null;
   globals: Record<string, Value>;
+  roles?: Record<string, Role>;
   stack: Frame[];
   output: string;
   returnValue?: Value;

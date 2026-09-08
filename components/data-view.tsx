@@ -7,6 +7,7 @@ import {
   chooseView,
   focusKind,
   graphModel,
+  graphState,
   sequence,
   type Focus,
   type Role,
@@ -79,7 +80,7 @@ function Graph({
             p === i ? [] : [{ from: i, to: p as number, weight: undefined }],
           ),
         }
-      : graphModel(value);
+      : graphModel(value, role?.neighborIndex);
   if (!model)
     return (
       <div className="view-fallback">
@@ -103,10 +104,14 @@ function Graph({
   }));
   const active = role?.bindings?.current
     ? variables[role.bindings.current]
-    : focus.find((f) => f.variable === name)?.indices[0];
+    : focus.find((f) => f.variable === name || f.aliases?.includes(name))
+        ?.indices[0];
   const neighbor = role?.bindings?.neighbor
     ? variables[role.bindings.neighbor]
     : undefined;
+  const stateName = role?.related?.find((n) =>
+    keys.some((key) => graphState(variables[n], key) !== undefined),
+  );
   return (
     <div className="graph-view">
       <svg
@@ -208,6 +213,27 @@ function Graph({
             >
               {(typeof key === 'string' ? key : format(key)).slice(0, 12)}
             </text>
+            {stateName &&
+              graphState(variables[stateName], key) !== undefined && (
+                <text
+                  x={positions[i].x}
+                  y={positions[i].y + 38}
+                  textAnchor="middle"
+                  fill="#b9d7c1"
+                  fontSize="10"
+                >
+                  {format(graphState(variables[stateName], key)).slice(0, 16)}
+                </text>
+              )}
+            {stateName && (
+              <title>
+                {stateName +
+                  '[' +
+                  format(key) +
+                  '] = ' +
+                  format(graphState(variables[stateName], key))}
+              </title>
+            )}
           </g>
         ))}
       </svg>
@@ -215,6 +241,7 @@ function Graph({
         {forest
           ? '화살표: 자식 → 부모 · 진한 정점: 자기 자신을 부모로 가진 대표 · 배치는 고정됩니다.'
           : '화살표: 연결 방향 · 선 위 숫자: 가중치 · 밝은 정점: 이웃 조회에 쓰인 현재 값'}
+        {stateName && ' · 정점 아래: ' + stateName + '의 현재 값'}
       </p>
     </div>
   );
@@ -342,7 +369,13 @@ export function DataView({
       .padStart(
         Math.max(
           4,
-          Math.min(32, typeof variables.n === 'number' ? variables.n : 4),
+          Math.min(
+            32,
+            role?.widthVariable &&
+              typeof variables[role.widthVariable] === 'number'
+              ? (variables[role.widthVariable] as number)
+              : 4,
+          ),
         ),
         '0',
       );
@@ -463,7 +496,12 @@ export function DataView({
                       focus,
                       name,
                       [r, c],
-                      [items.length, sequence(row)!.length],
+                      [
+                        value.length ?? items.length,
+                        container(row)
+                          ? (row.length ?? sequence(row)!.length)
+                          : sequence(row)!.length,
+                      ],
                     )}
                   />
                 </div>
@@ -495,7 +533,12 @@ export function DataView({
             <small>0</small>
           </div>
           {(items as number[]).map((v, i) => {
-            const kind = focusKind(focus, name, [i], items.length);
+            const kind = focusKind(
+              focus,
+              name,
+              [i],
+              value.length ?? items.length,
+            );
             const pointer = bounds
               ? Object.values(bounds).filter((n) => variables[n] === i)
               : [];
@@ -543,7 +586,7 @@ export function DataView({
             <Cell
               value={v}
               previous={old[i]}
-              focus={focusKind(focus, name, [i], items.length)}
+              focus={focusKind(focus, name, [i], value.length ?? items.length)}
             />
             <small>
               {view === 'queue'
