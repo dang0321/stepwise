@@ -64,6 +64,8 @@ button svg {
 .app-shell {
   --page-gutter: 38px;
   --playback-clearance: 120px;
+  --workspace-height: clamp(980px, 110svh, 1120px);
+  --canvas-height: 370px;
   max-width: 1600px;
   margin: auto;
   padding: 0 var(--page-gutter)
@@ -183,6 +185,8 @@ button svg {
 }
 .workspace {
   display: grid;
+  height: var(--workspace-height);
+  grid-template-rows: minmax(0, 1fr);
   grid-template-columns: minmax(320px, 0.85fr) minmax(0, 1.35fr);
   border: 1px solid #2e3a37;
   border-radius: 11px;
@@ -1729,5 +1733,80 @@ kbd {
   }
   .graph-view svg {
     height: 230px;
+  }
+}
+
+/* Keep execution steps from resizing the workspace or its drawing area. */
+.workspace > .code-panel,
+.workspace > .visual-panel {
+  display: grid;
+  min-height: 0;
+  overflow: hidden;
+}
+.workspace > .code-panel {
+  grid-template-rows: 53px minmax(0, 1fr) 300px 66px;
+}
+.workspace > .visual-panel {
+  grid-template-rows: 53px minmax(0, 1fr) 240px;
+}
+.workspace .code-editor,
+.workspace .code-read {
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+.workspace .code-editor textarea {
+  min-height: 0;
+}
+.workspace .input-area {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+.workspace .input-area textarea {
+  min-height: 51px;
+  max-height: 120px;
+}
+.workspace .visual-content {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+.workspace .data-tabs,
+.workspace .canvas-empty {
+  height: var(--canvas-height);
+  min-height: var(--canvas-height);
+}
+.workspace .data-tabs [data-slot='tabs-list'] {
+  flex-shrink: 0;
+}
+.workspace .data-tabs [data-slot='tabs-content'] {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+.workspace .step-insight {
+  max-height: 210px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  overflow-wrap: anywhere;
+}
+.workspace .step-insight > div {
+  min-width: 0;
+}
+.workspace .details-grid {
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+}
+.workspace .details-grid > div {
+  min-height: 0;
+  max-height: none;
+  scrollbar-gutter: stable;
+}
+@media (max-width: 720px) {
+  .workspace {
+    height: auto;
+    grid-template-rows: 800px 1040px;
   }
 }
